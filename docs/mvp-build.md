@@ -25,6 +25,11 @@ Build a production-shaped MVP first, then layer advanced modeling and live inges
 13. Lightweight simulation summary endpoint complete: `GET /api/v1/simulations/{run_id}/summary`.
 14. Simulation predictions pagination complete with `limit` + `offset` + metadata.
 15. Backend test suite passing at last verification: `31 passed`.
+16. Predictions sorting controls complete: `sort_by` (`mean`/`median`/`p10`/`p90`/`prob_negative`/`entity_name`) + `order` (`asc`/`desc`) with DB-level ORDER BY and stable pagination via secondary id sort.
+17. Optimizer rationale payload complete: `rank_reason` (mode-specific ranking explanation) + `chip_factors` (projected bonus and reasoning per active chip) on each `LineupRecommendation`.
+18. Optimizer constraints diagnostics complete: `budget_cap`/`budget_used`/`budget_margin`, `chip_active`/`chips_already_used`/`chip_eligible`, `free_transfers_assumed` on each recommendation.
+19. Optimizer modes behavior verified: tests confirm `max_upside >= max_ev >= min_downside` projected ordering and distinct `rank_reason` strings per mode.
+20. Simulation smoke/perf assertion complete: 10k sims within 30s threshold.
 
 ## 2) MVP Gaps Remaining
 
@@ -37,11 +42,11 @@ Build a production-shaped MVP first, then layer advanced modeling and live inges
 
 ### Stream A: Backend Simulation and Optimization
 
-1. Add sorting controls to predictions (`sort_by`, `order`) with stable pagination.
-2. Add optimizer rationale payload schema (why lineup ranked, chip recommendation factors).
-3. Implement explicit optimizer modes behavior checks (Max EV, Upside, Downside, Value Growth, Chip-aware).
-4. Add constraints diagnostics in optimize response (budget margin, chip eligibility, transfer assumptions).
-5. Add simulation smoke performance assertion for `n_sims >= 10,000`.
+1. ~~Add sorting controls to predictions (`sort_by`, `order`) with stable pagination.~~ ✅
+2. ~~Add optimizer rationale payload schema (why lineup ranked, chip recommendation factors).~~ ✅
+3. ~~Implement explicit optimizer modes behavior checks (Max EV, Upside, Downside, Value Growth, Chip-aware).~~ ✅
+4. ~~Add constraints diagnostics in optimize response (budget margin, chip eligibility, transfer assumptions).~~ ✅
+5. ~~Add simulation smoke performance assertion for `n_sims >= 10,000`.~~ ✅
 
 ### Stream B: API Contracts and Documentation
 
@@ -79,8 +84,8 @@ Build a production-shaped MVP first, then layer advanced modeling and live inges
 
 ## 4) Punctual Next Steps (Execution Order)
 
-1. Backend: add predictions sorting (`sort_by`, `order`) with tests.
-2. Backend: add optimizer explanation payload fields and tests.
+1. ~~Backend: add predictions sorting (`sort_by`, `order`) with tests.~~ ✅
+2. ~~Backend: add optimizer explanation payload fields and tests.~~ ✅
 3. API docs/contracts: publish updated simulation endpoint examples and contract snapshots.
 4. Frontend: scaffold app shell + typed API client + simulation summary integration.
 5. Frontend: deliver `Dashboard` first vertical slice.
