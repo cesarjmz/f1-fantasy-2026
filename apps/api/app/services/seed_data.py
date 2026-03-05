@@ -199,11 +199,11 @@ DRIVERS: list[Asset] = [
 ]
 
 CONSTRUCTORS: list[Asset] = [
-    Asset(id=101, name="Red Bull", asset_type="constructor", price_millions=28.0),
-    Asset(id=102, name="McLaren", asset_type="constructor", price_millions=27.0),
-    Asset(id=103, name="Ferrari", asset_type="constructor", price_millions=26.0),
-    Asset(id=104, name="Mercedes", asset_type="constructor", price_millions=24.0),
-    Asset(id=105, name="Aston Martin", asset_type="constructor", price_millions=16.0),
+    Asset(id=101, name="Red Bull", asset_type="constructor", price_millions=20.0),
+    Asset(id=102, name="McLaren", asset_type="constructor", price_millions=18.0),
+    Asset(id=103, name="Ferrari", asset_type="constructor", price_millions=16.0),
+    Asset(id=104, name="Mercedes", asset_type="constructor", price_millions=12.0),
+    Asset(id=105, name="Aston Martin", asset_type="constructor", price_millions=10.0),
 ]
 
 ALL_ASSETS = DRIVERS + CONSTRUCTORS

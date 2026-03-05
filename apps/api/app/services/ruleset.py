@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 RULESET = {
     "season": 2026,
     "hash": "2026-rules-v1",
-    "effective_from": datetime(2026, 1, 1, tzinfo=timezone.utc),
+    "effective_from": "2026-01-01T00:00:00+00:00",
     "roster": {"drivers": 5, "constructors": 2, "budget_millions": 100.0},
     "transfers": {"free_per_round": 2, "penalty_per_extra": 10, "net_transfers": True},
     "chips": {
