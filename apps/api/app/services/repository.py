@@ -22,6 +22,7 @@ from app.schemas.domain import (
     LineupHistoryItem,
     LineupHistoryResponse,
     PredictionRow,
+    PredictionSortField,
     RoundLifecycleItem,
     RoundLifecycleResponse,
     RoundInfo,
@@ -30,6 +31,7 @@ from app.schemas.domain import (
     SimulationSummaryResponse,
     SimulationSummaryEntity,
     SimulationPredictionsResponse,
+    SortOrder,
     TransferHistoryItem,
     TransferHistoryResponse,
     TeamViewResponse,
@@ -232,28 +234,46 @@ def save_simulation_run(
     db.commit()
 
 
+_PREDICTION_SORT_COLUMNS = {
+    "mean": SimulationPrediction.mean,
+    "median": SimulationPrediction.median,
+    "p10": SimulationPrediction.p10,
+    "p90": SimulationPrediction.p90,
+    "prob_negative": SimulationPrediction.prob_negative,
+    "entity_name": SimulationPrediction.entity_name,
+}
+
+
 def get_simulation_predictions(
     db: Session,
     run_id: str,
     limit: int | None = None,
     offset: int = 0,
+    sort_by: PredictionSortField = "mean",
+    order: SortOrder = "desc",
 ) -> SimulationPredictionsResponse | None:
     run = db.scalar(select(SimulationRun).where(SimulationRun.run_id == run_id))
     if run is None:
         return None
 
-    rows = db.scalars(
-        select(SimulationPrediction)
-        .where(SimulationPrediction.simulation_run_id == run.id)
-        .order_by(SimulationPrediction.id.asc())
-    ).all()
+    base_stmt = select(SimulationPrediction).where(
+        SimulationPrediction.simulation_run_id == run.id
+    )
+    total = db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
 
-    total = len(rows)
+    sort_col = _PREDICTION_SORT_COLUMNS.get(sort_by, SimulationPrediction.mean)
+    order_clause = sort_col.asc() if order == "asc" else sort_col.desc()
+    # Secondary sort on id for stable pagination
+    ordered_stmt = base_stmt.order_by(order_clause, SimulationPrediction.id.asc())
+
     page_limit = total if limit is None else limit
-    prediction_rows = rows[offset : offset + page_limit]
-    returned = len(prediction_rows)
+    rows = db.scalars(ordered_stmt.offset(offset).limit(page_limit)).all()
+    returned = len(rows)
     next_offset = offset + returned
     has_more = next_offset < total
+
+    # Summary uses all rows (unordered)
+    all_rows = db.scalars(base_stmt).all() if limit is not None else rows
 
     predictions = [
         PredictionRow(
@@ -268,7 +288,7 @@ def get_simulation_predictions(
                 prob_negative=row.prob_negative,
             ),
         )
-        for row in prediction_rows
+        for row in rows
     ]
 
     return SimulationPredictionsResponse(
@@ -277,7 +297,7 @@ def get_simulation_predictions(
         round=run.round,
         n_sims=run.n_sims,
         model_version=run.model_version,
-        summary=_build_simulation_summary(rows),
+        summary=_build_simulation_summary(list(all_rows)),
         meta=SimulationPredictionsMeta(
             total=total,
             limit=page_limit,
@@ -285,6 +305,8 @@ def get_simulation_predictions(
             returned=returned,
             has_more=has_more,
             next_offset=next_offset if has_more else None,
+            sort_by=sort_by,
+            order=order,
         ),
         predictions=predictions,
     )

@@ -728,3 +728,202 @@ def test_cache_invalidate_endpoint_clears_optimizer_namespace():
     after = client.post("/api/v1/optimize", json=payload)
     assert after.status_code == 200
     assert after.headers.get("x-cache") == "MISS"
+
+
+# --- Stream A: Predictions sorting tests ---
+
+
+def test_predictions_sort_by_mean_desc_is_default():
+    run = client.post(
+        "/api/v1/simulations/run", json={"season": 2026, "round": 11, "n_sims": 10000}
+    )
+    assert run.status_code == 200
+    run_id = run.json()["run_id"]
+
+    resp = client.get(f"/api/v1/simulations/{run_id}/predictions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["meta"]["sort_by"] == "mean"
+    assert body["meta"]["order"] == "desc"
+    means = [p["summary"]["mean"] for p in body["predictions"]]
+    assert means == sorted(means, reverse=True)
+
+
+def test_predictions_sort_by_p90_asc():
+    run = client.post(
+        "/api/v1/simulations/run", json={"season": 2026, "round": 12, "n_sims": 10000}
+    )
+    assert run.status_code == 200
+    run_id = run.json()["run_id"]
+
+    resp = client.get(
+        f"/api/v1/simulations/{run_id}/predictions",
+        params={"sort_by": "p90", "order": "asc"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["meta"]["sort_by"] == "p90"
+    assert body["meta"]["order"] == "asc"
+    p90s = [p["summary"]["p90"] for p in body["predictions"]]
+    assert p90s == sorted(p90s)
+
+
+def test_predictions_sort_by_entity_name_asc():
+    run = client.post(
+        "/api/v1/simulations/run", json={"season": 2026, "round": 13, "n_sims": 10000}
+    )
+    assert run.status_code == 200
+    run_id = run.json()["run_id"]
+
+    resp = client.get(
+        f"/api/v1/simulations/{run_id}/predictions",
+        params={"sort_by": "entity_name", "order": "asc"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    names = [p["entity_name"] for p in body["predictions"]]
+    assert names == sorted(names)
+
+
+def test_predictions_sorted_pagination_is_stable():
+    run = client.post(
+        "/api/v1/simulations/run", json={"season": 2026, "round": 14, "n_sims": 10000}
+    )
+    assert run.status_code == 200
+    run_id = run.json()["run_id"]
+
+    page1 = client.get(
+        f"/api/v1/simulations/{run_id}/predictions",
+        params={"sort_by": "mean", "order": "desc", "limit": 5, "offset": 0},
+    )
+    page2 = client.get(
+        f"/api/v1/simulations/{run_id}/predictions",
+        params={"sort_by": "mean", "order": "desc", "limit": 5, "offset": 5},
+    )
+    assert page1.status_code == 200
+    assert page2.status_code == 200
+    ids1 = [p["entity_id"] for p in page1.json()["predictions"]]
+    ids2 = [p["entity_id"] for p in page2.json()["predictions"]]
+    assert set(ids1).isdisjoint(set(ids2))
+    # Last of page1 mean >= first of page2 mean (desc order)
+    last_mean_p1 = page1.json()["predictions"][-1]["summary"]["mean"]
+    first_mean_p2 = page2.json()["predictions"][0]["summary"]["mean"]
+    assert last_mean_p1 >= first_mean_p2
+
+
+# --- Stream A: Optimizer rationale + constraints tests ---
+
+
+def test_optimize_response_contains_rationale_and_constraints():
+    payload = {
+        "season": 2026,
+        "round": 15,
+        "budget_millions": 100.0,
+        "risk_mode": "max_ev",
+        "used_chips": [],
+    }
+
+    resp = client.post("/api/v1/optimize", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    rec = body["recommendations"][0]
+    assert "rank_reason" in rec
+    assert len(rec["rank_reason"]) > 0
+    assert "chip_factors" in rec
+    assert isinstance(rec["chip_factors"], list)
+    assert "constraints" in rec
+    c = rec["constraints"]
+    assert c["budget_cap"] == 100.0
+    assert c["budget_used"] > 0
+    assert c["budget_margin"] == round(c["budget_cap"] - c["budget_used"], 2)
+    assert c["chip_active"] is None
+    assert c["chips_already_used"] == []
+    assert c["chip_eligible"] is True
+    assert c["free_transfers_assumed"] == 2
+
+
+def test_optimize_chip_aware_includes_chip_factors():
+    payload = {
+        "season": 2026,
+        "round": 11,
+        "budget_millions": 100.0,
+        "risk_mode": "chip_aware",
+        "chip": "autopilot",
+        "used_chips": [],
+    }
+
+    resp = client.post("/api/v1/optimize", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    rec = body["recommendations"][0]
+    assert len(rec["chip_factors"]) >= 1
+    factor = rec["chip_factors"][0]
+    assert factor["chip"] == "autopilot"
+    assert "projected_bonus" in factor
+    assert "reasoning" in factor
+    assert "autopilot" in factor["reasoning"]
+    assert rec["constraints"]["chip_active"] == "autopilot"
+
+
+# --- Stream A: Optimizer modes behavior tests ---
+
+
+def test_optimizer_modes_produce_different_top_lineups():
+    base = {
+        "season": 2026,
+        "round": 12,
+        "budget_millions": 100.0,
+        "used_chips": [],
+    }
+
+    modes = ["max_ev", "max_upside", "min_downside", "value_growth"]
+    projected_points = {}
+    for mode in modes:
+        resp = client.post("/api/v1/optimize", json={**base, "risk_mode": mode})
+        assert resp.status_code == 200
+        recs = resp.json()["recommendations"]
+        assert len(recs) > 0
+        projected_points[mode] = recs[0]["projected_points"]
+
+    # max_upside uses p90 sums which should be higher than max_ev means
+    assert projected_points["max_upside"] >= projected_points["max_ev"]
+    # min_downside uses p10 sums which should be lower than max_ev means
+    assert projected_points["min_downside"] <= projected_points["max_ev"]
+
+
+def test_optimizer_rank_reason_changes_per_mode():
+    base = {
+        "season": 2026,
+        "round": 13,
+        "budget_millions": 100.0,
+        "used_chips": [],
+    }
+
+    reasons = {}
+    for mode in ["max_ev", "max_upside", "min_downside", "value_growth"]:
+        resp = client.post("/api/v1/optimize", json={**base, "risk_mode": mode})
+        assert resp.status_code == 200
+        reasons[mode] = resp.json()["recommendations"][0]["rank_reason"]
+
+    # Each mode should have a distinct rank reason
+    unique_reasons = set(reasons.values())
+    assert len(unique_reasons) == 4
+
+
+# --- Stream A: Simulation smoke/perf test ---
+
+
+def test_simulation_10k_sims_completes_within_threshold():
+    import time
+
+    start = time.perf_counter()
+    run = client.post(
+        "/api/v1/simulations/run", json={"season": 2026, "round": 8, "n_sims": 10000}
+    )
+    elapsed = time.perf_counter() - start
+
+    assert run.status_code == 200
+    # 10k sims should complete within 30 seconds on any reasonable hardware
+    assert elapsed < 30.0, f"10k simulation took {elapsed:.1f}s, exceeds 30s threshold"

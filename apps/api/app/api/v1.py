@@ -13,17 +13,21 @@ from app.schemas.domain import (
     AuditBreakdownItem,
     AuditResponse,
     BriefingResponse,
+    ChipRecommendationFactor,
+    ConstraintsDiagnostics,
     LineupRecommendation,
     LineupHistoryResponse,
     RoundLifecycleResponse,
     OptimizeRequest,
     OptimizeResponse,
     PredictionRow,
+    PredictionSortField,
     PriceSnapshot,
     SimulationPredictionsResponse,
     SimulationSummaryResponse,
     SimulationRunRequest,
     SimulationRunResponse,
+    SortOrder,
     TransferHistoryResponse,
     ChipUsageResponse,
     TeamSubmissionRequest,
@@ -218,10 +222,12 @@ def simulation_predictions(
     run_id: str,
     limit: int | None = Query(default=None, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    sort_by: PredictionSortField = Query(default="mean"),
+    order: SortOrder = Query(default="desc"),
     db: Session = Depends(get_db),
 ) -> SimulationPredictionsResponse:
     persisted = get_simulation_predictions(
-        db, run_id=run_id, limit=limit, offset=offset
+        db, run_id=run_id, limit=limit, offset=offset, sort_by=sort_by, order=order
     )
     if persisted is None:
         raise HTTPException(
@@ -490,6 +496,9 @@ def optimize(payload: OptimizeRequest, response: Response) -> OptimizeResponse:
         n_sims=max(10_000, settings.default_simulation_count),
     )
 
+    chip_eligible = chip_ok
+    free_transfers_assumed = 2
+
     scored: list[LineupRecommendation] = []
     for drivers in combinations([d.id for d in DRIVERS], 5):
         for constructors in combinations([c.id for c in CONSTRUCTORS], 2):
@@ -500,17 +509,23 @@ def optimize(payload: OptimizeRequest, response: Response) -> OptimizeResponse:
                 continue
 
             budget_used = calculate_budget_used(list(drivers), list(constructors))
-            means = [predictions[a].mean for a in list(drivers) + list(constructors)]
-            p10s = [predictions[a].p10 for a in list(drivers) + list(constructors)]
-            p90s = [predictions[a].p90 for a in list(drivers) + list(constructors)]
+            all_ids = list(drivers) + list(constructors)
+            means = [predictions[a].mean for a in all_ids]
+            p10s = [predictions[a].p10 for a in all_ids]
+            p90s = [predictions[a].p90 for a in all_ids]
 
             projected = sum(means)
+            rank_reason = "Highest expected value (sum of means)"
+
             if payload.risk_mode == "max_upside":
                 projected = sum(p90s)
+                rank_reason = "Highest upside ceiling (sum of p90)"
             elif payload.risk_mode == "min_downside":
                 projected = sum(p10s)
+                rank_reason = "Best worst-case floor (sum of p10)"
             elif payload.risk_mode == "value_growth":
                 projected = sum(means) / max(1.0, budget_used)
+                rank_reason = "Best points-per-million efficiency"
             elif payload.risk_mode == "chip_aware" and payload.chip in {
                 "triple_boost",
                 "autopilot",
@@ -523,10 +538,40 @@ def optimize(payload: OptimizeRequest, response: Response) -> OptimizeResponse:
                         best, is_primary_boost=True, chip=payload.chip
                     )
                 )
+                rank_reason = f"Chip-adjusted ({payload.chip}) highest projected"
 
-            projected = apply_no_negative(projected, payload.chip)
+            chip_factors: list[ChipRecommendationFactor] = []
+            if payload.chip is not None:
+                original_projected = sum(means)
+                adjusted = apply_no_negative(projected, payload.chip)
+                bonus = round(adjusted - original_projected, 2)
+                chip_factors.append(
+                    ChipRecommendationFactor(
+                        chip=payload.chip,
+                        projected_bonus=bonus,
+                        reasoning=f"Applying {payload.chip} adds ~{bonus:.1f} pts vs baseline",
+                    )
+                )
+                projected = adjusted
+            else:
+                projected = apply_no_negative(projected, payload.chip)
+
             risk_score = round(sum(p90s) - sum(p10s), 2)
-            explanation = f"Budget {budget_used:.1f}m, projected {projected:.1f} ({payload.risk_mode})"
+            budget_margin = round(payload.budget_millions - budget_used, 2)
+            explanation = (
+                f"Budget {budget_used:.1f}m ({budget_margin:.1f}m margin), "
+                f"projected {projected:.1f} ({payload.risk_mode})"
+            )
+
+            constraints = ConstraintsDiagnostics(
+                budget_cap=payload.budget_millions,
+                budget_used=budget_used,
+                budget_margin=budget_margin,
+                chip_active=payload.chip,
+                chips_already_used=list(payload.used_chips),
+                chip_eligible=chip_eligible,
+                free_transfers_assumed=free_transfers_assumed,
+            )
 
             scored.append(
                 LineupRecommendation(
@@ -536,6 +581,9 @@ def optimize(payload: OptimizeRequest, response: Response) -> OptimizeResponse:
                     budget_used=budget_used,
                     risk_score=risk_score,
                     explanation=explanation,
+                    rank_reason=rank_reason,
+                    chip_factors=chip_factors,
+                    constraints=constraints,
                 )
             )
 

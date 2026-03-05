@@ -14,6 +14,10 @@ ChipName = Literal[
     "autopilot",
 ]
 RiskMode = Literal["max_ev", "max_upside", "min_downside", "value_growth", "chip_aware"]
+PredictionSortField = Literal[
+    "mean", "median", "p10", "p90", "prob_negative", "entity_name"
+]
+SortOrder = Literal["asc", "desc"]
 
 
 class RoundInfo(BaseModel):
@@ -87,6 +91,8 @@ class SimulationPredictionsMeta(BaseModel):
     returned: int
     has_more: bool
     next_offset: int | None
+    sort_by: PredictionSortField
+    order: SortOrder
 
 
 class SimulationPredictionsResponse(BaseModel):
@@ -118,6 +124,22 @@ class OptimizeRequest(BaseModel):
     used_chips: list[ChipName] = Field(default_factory=list)
 
 
+class ChipRecommendationFactor(BaseModel):
+    chip: ChipName
+    projected_bonus: float
+    reasoning: str
+
+
+class ConstraintsDiagnostics(BaseModel):
+    budget_cap: float
+    budget_used: float
+    budget_margin: float
+    chip_active: ChipName | None
+    chips_already_used: list[ChipName]
+    chip_eligible: bool
+    free_transfers_assumed: int
+
+
 class LineupRecommendation(BaseModel):
     drivers: list[int]
     constructors: list[int]
@@ -125,6 +147,9 @@ class LineupRecommendation(BaseModel):
     budget_used: float
     risk_score: float
     explanation: str
+    rank_reason: str
+    chip_factors: list[ChipRecommendationFactor]
+    constraints: ConstraintsDiagnostics
 
 
 class OptimizeResponse(BaseModel):
